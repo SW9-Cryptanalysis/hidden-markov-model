@@ -90,7 +90,25 @@ wheels = [
 ]
 
 [[package]]
-name = "cryptanalysis"
+name = "docopt"
+version = "0.6.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf578136ef2cc5dfb50baa1761b68c9da1fb1e4eed343c9/docopt-0.6.2.tar.gz", hash = "sha256:49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491", size = 25901, upload-time = "2014-06-16T11:18:57.406Z" }
+
+[[package]]
+name = "gutenberg-cleaner"
+version = "0.1.6"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "nltk" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/34/c5/c73ebc4def0f0ea222a25143dce37bfb677abd98ccbcb92de141980a1ff1/gutenberg_cleaner-0.1.6.tar.gz", hash = "sha256:1f54ea893d5c31a42cdd9fccf083956ac1a1f9f722b1385569f1d7bca319395d", size = 5008, upload-time = "2019-05-26T11:28:41.035Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d4/11/3b83da7620e9c05f48fb4791ef712791fabeda09c78c5200d0860ce1e97e/gutenberg_cleaner-0.1.6-py3-none-any.whl", hash = "sha256:6d0c2cd095087ada346f6836df99bc7aa01af2833cb322fc0414e821995e8e01", size = 7391, upload-time = "2019-05-26T11:28:39.488Z" },
+]
+
+[[package]]
+name = "hidden-markov-model"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
@@ -110,24 +128,6 @@ requires-dist = [
     { name = "python-levenshtein", specifier = ">=0.23.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "unidecode", specifier = ">=1.4.0" },
-]
-
-[[package]]
-name = "docopt"
-version = "0.6.2"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/a2/55/8f8cab2afd404cf578136ef2cc5dfb50baa1761b68c9da1fb1e4eed343c9/docopt-0.6.2.tar.gz", hash = "sha256:49b3a825280bd66b3aa83585ef59c4a8c82f2c8a522dbe754a8bc8d08c85c491", size = 25901, upload-time = "2014-06-16T11:18:57.406Z" }
-
-[[package]]
-name = "gutenberg-cleaner"
-version = "0.1.6"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "nltk" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/34/c5/c73ebc4def0f0ea222a25143dce37bfb677abd98ccbcb92de141980a1ff1/gutenberg_cleaner-0.1.6.tar.gz", hash = "sha256:1f54ea893d5c31a42cdd9fccf083956ac1a1f9f722b1385569f1d7bca319395d", size = 5008, upload-time = "2019-05-26T11:28:41.035Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d4/11/3b83da7620e9c05f48fb4791ef712791fabeda09c78c5200d0860ce1e97e/gutenberg_cleaner-0.1.6-py3-none-any.whl", hash = "sha256:6d0c2cd095087ada346f6836df99bc7aa01af2833cb322fc0414e821995e8e01", size = 7391, upload-time = "2019-05-26T11:28:39.488Z" },
 ]
 
 [[package]]
