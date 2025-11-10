@@ -1,0 +1,14 @@
+[project]
+name = "cryptanalysis"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gutenberg-cleaner>=0.1.6",
+    "hmmlearn>=0.3.3",
+    "num2words>=0.5.14",
+    "python-levenshtein>=0.23.0",
+    "requests>=2.32.5",
+    "unidecode>=1.4.0",
+]
