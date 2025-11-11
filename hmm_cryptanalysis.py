@@ -12,6 +12,8 @@ import multiprocessing
 import logging
 import warnings # Re-added for RuntimeWarning suppression
 
+np.random.seed(42)
+
 # --- CONSTANTS ---
 TRANS_MATRIX_FILENAME = "full_english_transmat.npy"
 CHECKPOINT_FILE = "output/hmm_checkpoint.json"
@@ -28,9 +30,13 @@ ENGLISH_FREQUENCIES = {
 }
 
 class HMMCryptanalysis:
-    def __init__(self, cipher_file: str = 'cipher.json'):
+    def __init__(self, cipher_file_path: Optional[str] = None):
         """Initialize the HMM cryptanalysis system."""
-        self.cipher_file = cipher_file
+        if cipher_file_path is None:
+            self.cipher_file = 'ciphers/z408.json'
+        else:
+            self.cipher_file = cipher_file_path
+        
         self.en_alphabet = [chr(i + ord('a')) for i in range(26)]
         self.alphabet_size = len(self.en_alphabet)
         
@@ -195,7 +201,7 @@ class HMMCryptanalysis:
                 return float('-inf'), f"HMM training failed: {e}"
 
     
-    def run_analysis(self, total_restarts=200000, batch_size=1000):
+    def run_analysis(self, total_restarts=1000, batch_size=100):
         print("=" * 60)
         print("HMM Cryptanalysis Starting (Checkpoint Enabled)")
         print("=" * 60)
@@ -289,22 +295,18 @@ class HMMCryptanalysis:
         print("=" * 60)
         print("Analysis Complete!")
         print("=" * 60)
+
+        # --- Clean up checkpoint file ---
+        print(f"Analysis complete. Deleting checkpoint file: {CHECKPOINT_FILE}")
+        if os.path.exists(CHECKPOINT_FILE):
+            try:
+                os.remove(CHECKPOINT_FILE)
+                print("Checkpoint file successfully deleted.")
+            except OSError as e:
+                print(f"Error: Could not delete checkpoint file. {e}")
+        else:
+            print("Checkpoint file not found (already deleted or never created).")
+
         return {"best_log_likelihood": best_log_likelihood,
                 "decoded": best_decoded,
                 "symbol_error_rate": checkpoint.get("symbol_error_rate", None)}
-    
-def main():
-    """Main function to run the cryptanalysis."""
-    np.random.seed(42)  
-    
-    try:
-        analyzer = HMMCryptanalysis()
-        results = analyzer.run_analysis()
-    except FileNotFoundError:
-        print("Error: cipher.json file not found!")
-        print("Make sure the cipher data file exists in the current directory.")
-    except Exception as e:
-        print(f"Error during analysis: {e}")
-
-if __name__ == "__main__":
-    main()
