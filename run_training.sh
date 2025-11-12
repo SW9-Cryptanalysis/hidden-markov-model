@@ -3,7 +3,7 @@
 #SBATCH --output=logs/%x_%j.out       # Output log file (%x=job name, %j=job ID)
 #SBATCH --error=logs/%x_%j.err        # Error log file
 #SBATCH --time=12:00:00               # Time limit (HH:MM:SS)
-#SBATCH --partition=standard          # Partition/queue name
+#SBATCH --partition=l4          # Partition/queue name
 #SBATCH --nodes=1                     # Number of nodes
 #SBATCH --ntasks=1                    # Number of tasks
 #SBATCH --cpus-per-task=8             # Number of CPU cores per task
