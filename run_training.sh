@@ -9,7 +9,7 @@
 #SBATCH --partition=l4
 
 # --- ENVIRONMENT SETUP ---
-cd ~/playground
+cd ~/hidden-markov-model
 mkdir -p logs
 
 # If you use a virtual environment:
