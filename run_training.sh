@@ -10,7 +10,7 @@
 #SBATCH --mem=24G                     # Memory per node
 
 # Optional: Load your environment or module
-module load python/3.11              # or any relevant module
+# module load python/3.11              # or any relevant module
 # If you use uv (like `uv run`), ensure it's available on PATH
 # module load uv                     # if uv is a module
 # or if it's installed via pipx, activate that env
