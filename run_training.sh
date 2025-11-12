@@ -1,25 +1,20 @@
 #!/bin/bash
-#SBATCH --job-name=cryptanalysis_train
-#SBATCH --output=slurm-%j.out              # temporary log file at job start
-#SBATCH --error=slurm-%j.err
-#SBATCH --gres=gpu:1
-#SBATCH --mem=24G
-#SBATCH --cpus-per-task=8
-#SBATCH --time=12:00:00
-#SBATCH --partition=l4
+#SBATCH --job-name=z408_job           # Name of the job
+#SBATCH --output=logs/%x_%j.out       # Output log file (%x=job name, %j=job ID)
+#SBATCH --error=logs/%x_%j.err        # Error log file
+#SBATCH --time=12:00:00               # Time limit (HH:MM:SS)
+#SBATCH --partition=standard          # Partition/queue name
+#SBATCH --nodes=1                     # Number of nodes
+#SBATCH --ntasks=1                    # Number of tasks
+#SBATCH --cpus-per-task=8             # Number of CPU cores per task
+#SBATCH --mem=24G                     # Memory per node
 
-# --- ENVIRONMENT SETUP ---
-cd ~/hidden-markov-model
-mkdir -p logs
+# Optional: Load your environment or module
+module load python/3.11              # or any relevant module
+# If you use uv (like `uv run`), ensure it's available on PATH
+# module load uv                     # if uv is a module
+# or if it's installed via pipx, activate that env
+# source ~/.local/bin/uv             # example path if installed manually
 
-# If you use a virtual environment:
-#source ~/my_venv/bin/activate
-
-# Or, if you use modules on AI-LAB:
-# module load python/3.10
-# module load cuda/12.1
-
-# --- RUN TRAINING ---
-echo "Job started on $(hostname) at $(date)" | tee logs/train_live_${SLURM_JOB_ID}.log
-uv run python -u main.py 2>&1 | tee -a logs/train_live_${SLURM_JOB_ID}.log
-echo "Job finished at $(date)" | tee -a logs/train_live_${SLURM_JOB_ID}.log
+# Run your command
+uv run main.py -c z408 -r 1000 -b 100
