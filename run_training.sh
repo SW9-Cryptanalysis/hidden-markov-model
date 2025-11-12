@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=z408_job           # Name of the job
-#SBATCH --output=logs/%x_%j.out       # Output log file (%x=job name, %j=job ID)
-#SBATCH --error=logs/%x_%j.err        # Error log file
+#SBATCH --output=logs/%x_%j.log
+#SBATCH --error=%x_%j.log
 #SBATCH --time=12:00:00               # Time limit (HH:MM:SS)
 #SBATCH --partition=l4          # Partition/queue name
 #SBATCH --nodes=1                     # Number of nodes
