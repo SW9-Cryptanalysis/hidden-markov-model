@@ -4,8 +4,6 @@
 #SBATCH --error=%x_%j.log
 #SBATCH --time=12:00:00               # Time limit (HH:MM:SS)
 #SBATCH --partition=l4          # Partition/queue name
-#SBATCH --nodes=1                     # Number of nodes
-#SBATCH --ntasks=1                    # Number of tasks
 #SBATCH --cpus-per-task=8             # Number of CPU cores per task
 #SBATCH --mem=24G                     # Memory per node
 
@@ -17,4 +15,8 @@
 # source ~/.local/bin/uv             # example path if installed manually
 
 # Run your command
-uv run main.py -c z408 -r 1000 -b 100
+echo "Job started on $(hostname) at $(date)" | tee logs/train_live_${SLURM_JOB_ID}.log
+
+uv run python -u main.py -c z408 -r 1000 -b 100 2>&1 | tee -a logs/train_live_${SLURM_JOB_ID}.log
+
+echo "Job finished at $(date)" | tee -a logs/train_live_${SLURM_JOB_ID}.log
