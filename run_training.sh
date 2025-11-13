@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=z408_job           # Name of the job
-#SBATCH --output=logs/%x_%j.log
-#SBATCH --error=%x_%j.log
+#SBATCH --job-name=hmm_job           # Name of the job
+#SBATCH --output=logs/slurm_%x_%j.out
+#SBATCH --error=logs/slurm_%x_%j.err
 #SBATCH --time=12:00:00               # Time limit (HH:MM:SS)
 #SBATCH --partition=l4          # Partition/queue name
 #SBATCH --cpus-per-task=8             # Number of CPU cores per task
