@@ -7,9 +7,12 @@
 #SBATCH --cpus-per-task=8             # Number of CPU cores per task
 #SBATCH --mem=24G                     # Memory per node
 
+mkdir -p logs
+
 # Run your command
 echo "Job started on $(hostname) at $(date)" | tee logs/train_live_${SLURM_JOB_ID}.log
+echo "Running with: -c ${C_ARG} -r ${R_ARG} -b ${B_ARG}" | tee -a logs/train_live_${SLURM_JOB_ID}.log
 
-uv run python -u main.py -c z408 -r 1000 -b 100 2>&1 | tee -a logs/train_live_${SLURM_JOB_ID}.log
+uv run python -u main.py -c "$C_ARG" -r "$R_ARG" -b "$B_ARG" 2>&1 | tee -a logs/train_live_${SLURM_JOB_ID}.log
 
 echo "Job finished at $(date)" | tee -a logs/train_live_${SLURM_JOB_ID}.log
