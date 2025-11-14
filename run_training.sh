@@ -9,6 +9,8 @@
 
 mkdir -p logs
 
+export PATH=/ceph/home/student.aau.dk/jriede20/.local/bin:$PATH
+
 # Run your command
 echo "Job started on $(hostname) at $(date)" | tee logs/train_live_${SLURM_JOB_ID}.log
 echo "Running with: -c ${C_ARG} -r ${R_ARG} -b ${B_ARG}" | tee -a logs/train_live_${SLURM_JOB_ID}.log
