@@ -158,7 +158,7 @@ class HMMCryptanalysis:
         english_freq_matrix = np.tile(shuffled_initial_probs.reshape(-1, 1), (1, self.n_unique_symbols))
         
         # Combine: Emission likelihood bias - Adjusted multiplier down slightly for stability
-        frequency_bias = english_freq_matrix * cipher_freq_matrix * 2
+        frequency_bias = english_freq_matrix * cipher_freq_matrix * 5 
         emission_probs += frequency_bias
         
         # ... (Rest of the function: STABILITY FIX 2, normalization, etc. is all good) ...
