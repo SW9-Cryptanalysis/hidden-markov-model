@@ -125,7 +125,6 @@ class HMMCryptanalysis:
         )
         
         # 1. Set initial state probabilities (Pi)
-        # This is the TRUE Pi, used for the model's start probability
         initial_probs = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
         initial_probs = initial_probs / initial_probs.sum()
         model.startprob_ = initial_probs
@@ -135,6 +134,7 @@ class HMMCryptanalysis:
         model.transmat_ = trans_matrix
         
         # 3. Initialize emission probabilities (B) with a high-noise, sparse guess.
+        
         # Step 3a: Initialize B with the floor value
         emission_probs = np.full((self.alphabet_size, self.n_unique_symbols), FLOOR_VALUE)
         
@@ -144,28 +144,25 @@ class HMMCryptanalysis:
         # Step 3c: Add the frequency-based bias
         symbol_counts = Counter(self.observations)
         total_counts = len(self.observations)
+        # Ensure cipher_frequencies is calculated over the entire range of unique symbols
         cipher_frequencies = np.array([symbol_counts.get(i, 0) / total_counts for i in range(self.n_unique_symbols)])
         
         # Create matrices for combining English and Cipher frequencies
         cipher_freq_matrix = np.tile(cipher_frequencies, (self.alphabet_size, 1))
-        
-        # ---
-        # 💡 THE FIX: Use a *PERMUTED* version of English frequencies
-        #    to seed the B-matrix bias. This makes each restart
-        #    explore a fundamentally different initial guess.
-        # ---
-        shuffled_initial_probs = np.random.permutation(initial_probs)
-        english_freq_matrix = np.tile(shuffled_initial_probs.reshape(-1, 1), (1, self.n_unique_symbols))
+        english_freq_matrix = np.tile(initial_probs.reshape(-1, 1), (1, self.n_unique_symbols))
         
         # Combine: Emission likelihood bias - Adjusted multiplier down slightly for stability
         frequency_bias = english_freq_matrix * cipher_freq_matrix * 5 
         emission_probs += frequency_bias
         
-        # ... (Rest of the function: STABILITY FIX 2, normalization, etc. is all good) ...
+        # 💡 CRITICAL STABILITY FIX 2: Ensure all values are above the floor before normalization
+        emission_probs = np.maximum(emission_probs, FLOOR_VALUE)
         
+        # Ensure proper normalization (row sums must be 1)
         row_sums = emission_probs.sum(axis=1, keepdims=True)
         emission_probs = emission_probs / row_sums
         
+        # 💡 CRITICAL STABILITY FIX 3: Re-apply floor after normalization, just in case
         model.emissionprob_ = np.maximum(emission_probs, FLOOR_VALUE)
         
         return model
@@ -200,9 +197,6 @@ class HMMCryptanalysis:
                 return curr_log_likelihood, curr_decoded
             
             except Exception as e:
-                # 💡 ADD THIS LINE to see the actual error in your console
-                print(f"HMM FAILED: {e}") 
-                
                 # Return lowest possible score on failure
                 return float('-inf'), f"HMM training failed: {e}"
 
