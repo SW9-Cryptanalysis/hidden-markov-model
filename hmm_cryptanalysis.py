@@ -120,7 +120,7 @@ class HMMCryptanalysis:
             n_features=self.n_unique_symbols,
             init_params='',     
             n_iter=500, # Increased iterations for more robust convergence
-            tol=1e-4,
+            tol=0.01,           
             params='e'          # Only estimate emissions (B matrix)
         )
         
