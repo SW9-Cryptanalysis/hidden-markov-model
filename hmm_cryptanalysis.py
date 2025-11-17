@@ -119,9 +119,9 @@ class HMMCryptanalysis:
             n_components=self.alphabet_size, 
             n_features=self.n_unique_symbols,
             init_params='',     
-            n_iter=500, # Increased iterations for more robust convergence
+            n_iter=200, # Increased iterations for more robust convergence
             tol=0.01,           
-            params='e'          # Only estimate emissions (B matrix)
+            params='se'          # Only estimate emissions (B matrix)
         )
         
         # 1. Set initial state probabilities (Pi)
