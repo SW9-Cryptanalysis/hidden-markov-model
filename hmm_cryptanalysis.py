@@ -110,8 +110,7 @@ class HMMCryptanalysis:
     
     def initialize_hmm(self) -> hmm.CategoricalHMM:
         """
-        Initializes HMM using Dirichlet distribution for 'spiky' random guesses.
-        Best for high-homophony ciphers like Z408.
+        Fully randomized initialization (Pi and B) as per Vobbilisetty (2015).
         """
         FLOOR_VALUE = 1e-100
         
@@ -121,36 +120,33 @@ class HMMCryptanalysis:
             init_params='',     
             n_iter=200,
             tol=1e-4,           
-            params='e',
+            params='se',        # ⚠️ UPDATE: 's' (startprob) and 'e' (emission)
             verbose=False
         )
         
-        # 1. Pi (Fixed to English)
-        initial_probs = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
-        initial_probs = initial_probs / initial_probs.sum()
-        model.startprob_ = initial_probs
-        
-        # 2. Transition Matrix (Fixed to English)
+        # 1. Transition Matrix (A) - FIXED (The paper does not modify A)
         model.transmat_ = self.create_transition_matrix()
+
+        # -------------------------------------------------------------------------
+        # 2. Pi (Start Probs) - RANDOMIZED 
+        # -------------------------------------------------------------------------
+        # We use Dirichlet to create a "spiky" guess. 
+        # In one restart, it might guess the text starts with 'Q'. 
+        # In another, it might correctly guess 'I'.
+        # alpha=1.0 is uniform random; alpha<1.0 is sparse (spiky).
+        pi_alpha = np.full(self.alphabet_size, 0.1) 
+        random_pi = np.random.dirichlet(pi_alpha)
+        model.startprob_ = np.maximum(random_pi, FLOOR_VALUE)
+
+        # -------------------------------------------------------------------------
+        # 3. Emission Matrix (B) - RANDOMIZED [cite: 491]
+        # -------------------------------------------------------------------------
+        # Using Dirichlet for spiky initialization (good for homophonic ciphers)
+        b_alpha = np.full(self.n_unique_symbols, 0.1)
+        emission_probs = np.random.dirichlet(b_alpha, size=self.alphabet_size)
         
-        # 3. Emission Matrix (Dirichlet Initialization)
-        # alpha < 1.0 creates "sparse" (spiky) distributions.
-        # alpha = 0.1 is a good starting point for Z408.
-        alpha_val = 0.1 
-        alpha_vec = np.full(self.n_unique_symbols, alpha_val)
-        
-        # Generate distinct random rows for each English letter
-        # resulting in shape (26, 54)
-        emission_probs = np.random.dirichlet(alpha_vec, size=self.alphabet_size)
-        
-        # Transpose might be needed depending on how you want the sparsity to align,
-        # but usually we want: "For State 'E', here are the prob of emission symbols."
-        # Dirichlet ensures the rows sum to 1 automatically.
-        
-        # Apply floor safety
+        # Normalize and Floor
         model.emissionprob_ = np.maximum(emission_probs, FLOOR_VALUE)
-        
-        # Re-normalize just in case the floor pushed sums > 1
         row_sums = model.emissionprob_.sum(axis=1, keepdims=True)
         model.emissionprob_ = model.emissionprob_ / row_sums
         
