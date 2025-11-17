@@ -109,64 +109,48 @@ class HMMCryptanalysis:
         return self.transition_matrix
     
     def initialize_hmm(self) -> hmm.CategoricalHMM:
-        """Initializes HMM for a single random restart with numerical stability fixes."""
+        """
+        Initializes HMM using the 'Pure Random' strategy from Vobbilisetty (2015).
+        """
+        FLOOR_VALUE = 1e-100
         
-        # 💡 CRITICAL STABILITY FIX 1: Set a numerical floor value
-        FLOOR_VALUE = 1e-100 
-        
-        # --- MODEL SETUP (Using the actual hmmlearn model) ---
         model = hmm.CategoricalHMM(
             n_components=self.alphabet_size, 
             n_features=self.n_unique_symbols,
             init_params='',     
-            n_iter=500, # Increased iterations for more robust convergence
-            tol=0.01,           
-            params='e'          # Only estimate emissions (B matrix)
+            n_iter=200,         # Paper suggests 100-200 is sufficient [cite: 509]
+            tol=1e-4,           
+            params='e',         # Update Emission (B) only
+            verbose=False
         )
         
-        # 1. Set initial state probabilities (Pi)
+        # 1. Pi (Start Probs) - The paper actually randomizes this too[cite: 491],
+        #    but keeping it fixed to English is generally safer for short text.
+        #    Let's stick to fixed English for now.
         initial_probs = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
         initial_probs = initial_probs / initial_probs.sum()
         model.startprob_ = initial_probs
         
-        # 2. Set transition matrix (A) - Uses the pre-loaded, high-quality matrix.
-        trans_matrix = self.create_transition_matrix()
-        model.transmat_ = trans_matrix
+        # 2. Transition Matrix (A) - FIXED [cite: 480]
+        model.transmat_ = self.create_transition_matrix()
         
-        # 3. Initialize emission probabilities (B) with a high-noise, sparse guess.
+        # 3. Emission Matrix (B) - PURE RANDOM [cite: 481]
+        # Instead of the complex bias, we just use uniform random noise.
+        # This gives the solver a flat surface to start climbing.
         
-        # Step 3a: Initialize B with the floor value
-        emission_probs = np.full((self.alphabet_size, self.n_unique_symbols), FLOOR_VALUE)
+        # A. Create random matrix (26 x Unique_Symbols)
+        emission_probs = np.random.uniform(0, 1, size=(self.alphabet_size, self.n_unique_symbols))
         
-        # Step 3b: Add large, uniform random noise (0 to 1)
-        emission_probs += np.random.uniform(0, 1, size=emission_probs.shape)
-        
-        # Step 3c: Add the frequency-based bias
-        symbol_counts = Counter(self.observations)
-        total_counts = len(self.observations)
-        # Ensure cipher_frequencies is calculated over the entire range of unique symbols
-        cipher_frequencies = np.array([symbol_counts.get(i, 0) / total_counts for i in range(self.n_unique_symbols)])
-        
-        # Create matrices for combining English and Cipher frequencies
-        cipher_freq_matrix = np.tile(cipher_frequencies, (self.alphabet_size, 1))
-        english_freq_matrix = np.tile(initial_probs.reshape(-1, 1), (1, self.n_unique_symbols))
-        
-        # Combine: Emission likelihood bias - Adjusted multiplier down slightly for stability
-        frequency_bias = english_freq_matrix * cipher_freq_matrix * 5 
-        emission_probs += frequency_bias
-        
-        # 💡 CRITICAL STABILITY FIX 2: Ensure all values are above the floor before normalization
-        emission_probs = np.maximum(emission_probs, FLOOR_VALUE)
-        
-        # Ensure proper normalization (row sums must be 1)
+        # B. Normalize rows to sum to 1
         row_sums = emission_probs.sum(axis=1, keepdims=True)
+        row_sums = np.maximum(row_sums, FLOOR_VALUE) # Safety clamp
         emission_probs = emission_probs / row_sums
         
-        # 💡 CRITICAL STABILITY FIX 3: Re-apply floor after normalization, just in case
+        # C. Apply floor
         model.emissionprob_ = np.maximum(emission_probs, FLOOR_VALUE)
         
         return model
-
+    
     # --- Function for parallel execution ---
     def run_single_hmm(self, X: np.ndarray) -> Tuple[float, str]:
         """
