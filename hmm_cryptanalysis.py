@@ -110,7 +110,8 @@ class HMMCryptanalysis:
     
     def initialize_hmm(self) -> hmm.CategoricalHMM:
         """
-        Initializes HMM using the 'Pure Random' strategy from Vobbilisetty (2015).
+        Initializes HMM using Dirichlet distribution for 'spiky' random guesses.
+        Best for high-homophony ciphers like Z408.
         """
         FLOOR_VALUE = 1e-100
         
@@ -118,39 +119,43 @@ class HMMCryptanalysis:
             n_components=self.alphabet_size, 
             n_features=self.n_unique_symbols,
             init_params='',     
-            n_iter=200,         # Paper suggests 100-200 is sufficient [cite: 509]
+            n_iter=200,
             tol=1e-4,           
-            params='e',         # Update Emission (B) only
+            params='e',
             verbose=False
         )
         
-        # 1. Pi (Start Probs) - The paper actually randomizes this too[cite: 491],
-        #    but keeping it fixed to English is generally safer for short text.
-        #    Let's stick to fixed English for now.
+        # 1. Pi (Fixed to English)
         initial_probs = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
         initial_probs = initial_probs / initial_probs.sum()
         model.startprob_ = initial_probs
         
-        # 2. Transition Matrix (A) - FIXED [cite: 480]
+        # 2. Transition Matrix (Fixed to English)
         model.transmat_ = self.create_transition_matrix()
         
-        # 3. Emission Matrix (B) - PURE RANDOM [cite: 481]
-        # Instead of the complex bias, we just use uniform random noise.
-        # This gives the solver a flat surface to start climbing.
+        # 3. Emission Matrix (Dirichlet Initialization)
+        # alpha < 1.0 creates "sparse" (spiky) distributions.
+        # alpha = 0.1 is a good starting point for Z408.
+        alpha_val = 0.1 
+        alpha_vec = np.full(self.n_unique_symbols, alpha_val)
         
-        # A. Create random matrix (26 x Unique_Symbols)
-        emission_probs = np.random.uniform(0, 1, size=(self.alphabet_size, self.n_unique_symbols))
+        # Generate distinct random rows for each English letter
+        # resulting in shape (26, 54)
+        emission_probs = np.random.dirichlet(alpha_vec, size=self.alphabet_size)
         
-        # B. Normalize rows to sum to 1
-        row_sums = emission_probs.sum(axis=1, keepdims=True)
-        row_sums = np.maximum(row_sums, FLOOR_VALUE) # Safety clamp
-        emission_probs = emission_probs / row_sums
+        # Transpose might be needed depending on how you want the sparsity to align,
+        # but usually we want: "For State 'E', here are the prob of emission symbols."
+        # Dirichlet ensures the rows sum to 1 automatically.
         
-        # C. Apply floor
+        # Apply floor safety
         model.emissionprob_ = np.maximum(emission_probs, FLOOR_VALUE)
         
+        # Re-normalize just in case the floor pushed sums > 1
+        row_sums = model.emissionprob_.sum(axis=1, keepdims=True)
+        model.emissionprob_ = model.emissionprob_ / row_sums
+        
         return model
-    
+
     # --- Function for parallel execution ---
     def run_single_hmm(self, X: np.ndarray) -> Tuple[float, str]:
         """
