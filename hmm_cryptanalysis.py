@@ -109,54 +109,62 @@ class HMMCryptanalysis:
         return self.transition_matrix
     
     def initialize_hmm(self) -> hmm.CategoricalHMM:
-        """
-        Initializes the HMM exactly as described in the paper:
-        - A fixed to English digraph stats (precomputed transition matrix)
-        - π initialized randomly (re-estimated by Baum–Welch)
-        - B initialized randomly (re-estimated by Baum–Welch)
-        """
-
-        # Number of hidden states (plaintext)
-        N = self.alphabet_size     
-        # Number of observation symbols (ciphertext)
-        M = self.n_unique_symbols  
-
-        # Create the model
+        """Initializes HMM for a single random restart with numerical stability fixes."""
+        
+        # 💡 CRITICAL STABILITY FIX 1: Set a numerical floor value
+        FLOOR_VALUE = 1e-100 
+        
+        # --- MODEL SETUP (Using the actual hmmlearn model) ---
         model = hmm.CategoricalHMM(
-            n_components=N,
-            n_features=M,
-            init_params="",          # We manually initialize everything
-            params="se",             # Train Startprob (π) and Emissions (B)
-            n_iter=200,
-            tol=0.01
+            n_components=self.alphabet_size, 
+            n_features=self.n_unique_symbols,
+            init_params='',     
+            n_iter=200, # Increased iterations for more robust convergence
+            tol=0.01,           
+            params='se'          # Only estimate emissions (B matrix)
         )
-
-        # -------------------------------------------------------------
-        # 1. Initialize π (start probabilities) RANDOMLY
-        # -------------------------------------------------------------
-        pi = np.random.rand(N)
-        pi /= pi.sum()
-        model.startprob_ = pi
-
-        # -------------------------------------------------------------
-        # 2. Set A (transition matrix) FIXED (English digraph matrix)
-        #    — Should NOT be re-estimated during training
-        # -------------------------------------------------------------
-        A = self.transition_matrix.copy()
-        model.transmat_ = A
-
-        # Prevent hmmlearn from trying to modify transitions:
-        # (it obeys params="sb", so it won't update A)
-        # Just included for clarity.
-        # model.transmat_prior = 0  
-
-        # -------------------------------------------------------------
-        # 3. Initialize B (emission matrix) RANDOMLY & normalize rows
-        # -------------------------------------------------------------
-        B = np.random.rand(N, M)
-        B = B / B.sum(axis=1, keepdims=True)
-        model.emissionprob_ = B
-
+        
+        # 1. Set initial state probabilities (Pi)
+        initial_probs = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
+        initial_probs = initial_probs / initial_probs.sum()
+        model.startprob_ = initial_probs
+        
+        # 2. Set transition matrix (A) - Uses the pre-loaded, high-quality matrix.
+        trans_matrix = self.create_transition_matrix()
+        model.transmat_ = trans_matrix
+        
+        # 3. Initialize emission probabilities (B) with a high-noise, sparse guess.
+        
+        # Step 3a: Initialize B with the floor value
+        emission_probs = np.full((self.alphabet_size, self.n_unique_symbols), FLOOR_VALUE)
+        
+        # Step 3b: Add large, uniform random noise (0 to 1)
+        emission_probs += np.random.uniform(0, 1, size=emission_probs.shape)
+        
+        # Step 3c: Add the frequency-based bias
+        symbol_counts = Counter(self.observations)
+        total_counts = len(self.observations)
+        # Ensure cipher_frequencies is calculated over the entire range of unique symbols
+        cipher_frequencies = np.array([symbol_counts.get(i, 0) / total_counts for i in range(self.n_unique_symbols)])
+        
+        # Create matrices for combining English and Cipher frequencies
+        cipher_freq_matrix = np.tile(cipher_frequencies, (self.alphabet_size, 1))
+        english_freq_matrix = np.tile(initial_probs.reshape(-1, 1), (1, self.n_unique_symbols))
+        
+        # Combine: Emission likelihood bias - Adjusted multiplier down slightly for stability
+        frequency_bias = english_freq_matrix * cipher_freq_matrix * 5 
+        emission_probs += frequency_bias
+        
+        # 💡 CRITICAL STABILITY FIX 2: Ensure all values are above the floor before normalization
+        emission_probs = np.maximum(emission_probs, FLOOR_VALUE)
+        
+        # Ensure proper normalization (row sums must be 1)
+        row_sums = emission_probs.sum(axis=1, keepdims=True)
+        emission_probs = emission_probs / row_sums
+        
+        # 💡 CRITICAL STABILITY FIX 3: Re-apply floor after normalization, just in case
+        model.emissionprob_ = np.maximum(emission_probs, FLOOR_VALUE)
+        
         return model
 
     # --- Function for parallel execution ---
