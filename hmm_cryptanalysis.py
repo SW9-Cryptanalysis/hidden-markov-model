@@ -12,6 +12,9 @@ import multiprocessing
 import logging
 import warnings # Re-added for RuntimeWarning suppression
 
+import time
+from datetime import datetime
+
 np.random.seed(42)
 
 # --- CONSTANTS ---
@@ -206,6 +209,8 @@ class HMMCryptanalysis:
         print("HMM Cryptanalysis Starting (Checkpoint Enabled)")
         print("=" * 60)
 
+        start_wallclock = time.time()
+
         os.makedirs('output', exist_ok=True)
         np.seterr(under='ignore')
 
@@ -219,16 +224,23 @@ class HMMCryptanalysis:
             start_batch = checkpoint.get("last_completed_batch", 0) + 1
             best_log_likelihood = checkpoint.get("best_log_likelihood", float('-inf'))
             best_decoded = checkpoint.get("best_decoded", None)
+            accumulated_runtime = checkpoint.get("accumulated_runtime", 0.0)
+
             print(f"Resuming from batch {start_batch}")
         else:
             start_batch = 0
             best_log_likelihood = float('-inf')
             best_decoded = None
+            accumulated_runtime = 0.0
+
+        print(f"Starting runtime accumulator at: {accumulated_runtime:.2f} seconds")
 
         # --- BATCH LOOP ---
         total_batches = int(np.ceil(total_restarts / batch_size))
         for batch_idx in range(start_batch, total_batches):
             print(f"\nRunning batch {batch_idx+1}/{total_batches} ...")
+
+            batch_start = time.time()
 
             all_results = Parallel(n_jobs=n_jobs, verbose=10)(
                 delayed(self.run_single_hmm)(X) for _ in range(batch_size)
@@ -244,18 +256,24 @@ class HMMCryptanalysis:
                     with open("output/hmm_decoded_plaintext.txt", "w") as f:
                         f.write(best_decoded)
 
+                batch_runtime = time.time() - batch_start
+                accumulated_runtime += batch_runtime
+
+                current_timestamp = datetime.utcnow().isoformat()
+
             # --- SAVE CHECKPOINT ---
             checkpoint = {
                 "last_completed_batch": batch_idx,
                 "best_log_likelihood": best_log_likelihood,
                 "best_decoded": best_decoded,
+                "accumulated_runtime": accumulated_runtime,
+                "last_update_utc": current_timestamp
             }
             with open(CHECKPOINT_FILE, 'w') as f:
                 json.dump(checkpoint, f)
 
-            print(f"Checkpoint saved after batch {batch_idx+1}. Best log likelihood: {best_log_likelihood:.2f}")
-
-            # Optional: flush I/O to make sure it's written before timeout
+            print(f"Checkpoint saved. Batch runtime: {batch_runtime:.2f}s. "
+                f"Total runtime: {accumulated_runtime:.2f}s")
             os.sync()
             
         print("\nAll batches completed.")
@@ -306,6 +324,10 @@ class HMMCryptanalysis:
                 print(f"Error: Could not delete checkpoint file. {e}")
         else:
             print("Checkpoint file not found (already deleted or never created).")
+
+        total_wallclock = time.time() - start_wallclock
+        print(f"\nTotal wall-clock runtime this session: {total_wallclock:.2f} seconds")
+        print(f"Accumulated runtime (across restarts): {accumulated_runtime:.2f} seconds")
 
         return {"best_log_likelihood": best_log_likelihood,
                 "decoded": best_decoded,
