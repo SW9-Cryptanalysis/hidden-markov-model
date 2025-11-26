@@ -256,10 +256,10 @@ class HMMCryptanalysis:
                     with open("output/hmm_decoded_plaintext.txt", "w") as f:
                         f.write(best_decoded)
 
-                batch_runtime = time.time() - batch_start
-                accumulated_runtime += batch_runtime
+            batch_runtime = time.time() - batch_start
+            accumulated_runtime += batch_runtime
 
-                current_timestamp = datetime.utcnow().isoformat()
+            current_timestamp = datetime.utcnow().isoformat()
 
             # --- SAVE CHECKPOINT ---
             checkpoint = {
