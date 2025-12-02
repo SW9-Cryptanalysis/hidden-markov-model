@@ -1,10 +1,9 @@
 import numpy as np
 import json
 import os
-from hmmlearn import hmm # RE-INSTATED THE ACTUAL hmmlearn MODEL
-from collections import Counter, defaultdict
 import string
 from typing import Dict, List, Tuple, Optional
+import math
 
 # New imports for parallel processing
 from joblib import Parallel, delayed
@@ -111,98 +110,211 @@ class HMMCryptanalysis:
         """
         return self.transition_matrix
     
-    def initialize_hmm(self) -> hmm.CategoricalHMM:
-        """Initializes HMM for a single random restart with numerical stability fixes."""
-        
-        # 💡 CRITICAL STABILITY FIX 1: Set a numerical floor value
-        FLOOR_VALUE = 1e-100 
-        
-        # --- MODEL SETUP (Using the actual hmmlearn model) ---
-        model = hmm.CategoricalHMM(
-            n_components=self.alphabet_size, 
-            n_features=self.n_unique_symbols,
-            init_params='',     
-            n_iter=200, 
-            tol=0.01,           
-            params='e'          # Only estimate emissions (B matrix)
-        )
-        
-        # 1. Set initial state probabilities (Pi)
-        initial_probs = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
-        initial_probs = initial_probs / initial_probs.sum()
-        model.startprob_ = initial_probs
-        
-        # 2. Set transition matrix (A) - Uses the pre-loaded, high-quality matrix.
-        trans_matrix = self.create_transition_matrix()
-        model.transmat_ = trans_matrix
-        
-        # 3. Initialize emission probabilities (B) with a high-noise, sparse guess.
-        
-        # Step 3a: Initialize B with the floor value
-        emission_probs = np.full((self.alphabet_size, self.n_unique_symbols), FLOOR_VALUE)
-        
-        # Step 3b: Add large, uniform random noise (0 to 1)
-        emission_probs += np.random.uniform(0, 1, size=emission_probs.shape)
-        
-        # Step 3c: Add the frequency-based bias
-        symbol_counts = Counter(self.observations)
-        total_counts = len(self.observations)
-        # Ensure cipher_frequencies is calculated over the entire range of unique symbols
-        cipher_frequencies = np.array([symbol_counts.get(i, 0) / total_counts for i in range(self.n_unique_symbols)])
-        
-        # Create matrices for combining English and Cipher frequencies
-        cipher_freq_matrix = np.tile(cipher_frequencies, (self.alphabet_size, 1))
-        english_freq_matrix = np.tile(initial_probs.reshape(-1, 1), (1, self.n_unique_symbols))
-        
-        # Combine: Emission likelihood bias - Adjusted multiplier down slightly for stability
-        frequency_bias = english_freq_matrix * cipher_freq_matrix * 5 
-        emission_probs += frequency_bias
-        
-        # 💡 CRITICAL STABILITY FIX 2: Ensure all values are above the floor before normalization
-        emission_probs = np.maximum(emission_probs, FLOOR_VALUE)
-        
-        # Ensure proper normalization (row sums must be 1)
-        row_sums = emission_probs.sum(axis=1, keepdims=True)
-        emission_probs = emission_probs / row_sums
-        
-        # 💡 CRITICAL STABILITY FIX 3: Re-apply floor after normalization, just in case
-        model.emissionprob_ = np.maximum(emission_probs, FLOOR_VALUE)
-        
-        return model
-
-    # --- Function for parallel execution ---
-    def run_single_hmm(self, X: np.ndarray) -> Tuple[float, str]:
+    def _init_em_params(self, base=0.1):
         """
-        Runs one HMM training and decoding cycle.
-        Returns the log likelihood and the decoded text.
+        Initialize HMM parameters according to the paper:
+        - A: loaded transition matrix (26x26) (fixed by default)
+        - pi: initial probs from english frequencies (normalized)
+        - B: emission matrix initialized as base + Uniform(0,1), rows normalized
         """
-        
-        # 1. Suppress WARNING level messages from the hmmlearn logger.
-        logging.getLogger('hmmlearn').setLevel(logging.ERROR)
+        N = self.alphabet_size          # 26
+        M = self.n_unique_symbols       # number of cipher symbols
 
-        # 2. Suppress C-extension/NumPy RuntimeWarnings (like degenerate solution).
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning)
-            
-            try:
-                model = self.initialize_hmm()
-                
-                # Train the model
-                model.fit(X)
-                
-                # Calculate log likelihood of the observations
-                curr_log_likelihood = model.score(X)
-                
-                # Decode using Viterbi
-                _, hidden_states = model.decode(X, algorithm="viterbi")
-                curr_decoded = ''.join([self.en_alphabet[state] for state in hidden_states])
-                
-                return curr_log_likelihood, curr_decoded
-            
-            except Exception as e:
-                # Return lowest possible score on failure
-                return float('-inf'), f"HMM training failed: {e}"
+        # pi (initial state distribution)
+        pi = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
+        pi = pi / pi.sum()
 
+        # A (transition matrix)
+        A = self.create_transition_matrix()
+        # ensure rows sum to 1
+        A = A / (A.sum(axis=1, keepdims=True) + 1e-16)
+
+        # B (emission matrix) per paper: b_ij = base + Uniform(0,1), then normalize row-wise
+        rng = np.random.default_rng()
+        B = base + rng.random((N, M))
+        B = B / (B.sum(axis=1, keepdims=True) + 1e-16)
+
+        return pi, A, B
+    
+    def _forward_scaled(self, pi, A, B, O):
+        """
+        Scaled forward algorithm.
+        Returns:
+          alpha (T x N) scaled so each row sums to 1,
+          c (T,) scaling factors (the sums before scaling),
+          loglik = -sum(log(c))
+        """
+        T = len(O)
+        N = A.shape[0]
+
+        alpha = np.zeros((T, N), dtype=float)
+        c = np.zeros(T, dtype=float)
+
+        # t = 0
+        alpha[0, :] = pi * B[:, O[0]]
+        c[0] = alpha[0, :].sum()
+        if c[0] <= 0:
+            c[0] = 1e-300
+        alpha[0, :] /= c[0]
+
+        for t in range(1, T):
+            # predict-transmit
+            alpha[t, :] = (alpha[t-1, :].dot(A)) * B[:, O[t]]
+            c[t] = alpha[t, :].sum()
+            if c[t] <= 0:
+                c[t] = 1e-300
+            alpha[t, :] /= c[t]
+
+        # log-likelihood: log P(O|λ) = - sum_t log(c[t])
+        loglik = -np.sum(np.log(c + 1e-300))
+        return alpha, c, loglik
+
+    def _backward_scaled(self, A, B, O, c):
+        """
+        Scaled backward algorithm (consistent with forward scaling).
+        Returns beta scaled so that alpha_t * beta_t sums to 1.
+        """
+        T = len(O)
+        N = A.shape[0]
+        beta = np.zeros((T, N), dtype=float)
+
+        # initialize
+        beta[T - 1, :] = 1.0  # with scaled alpha, this is standard
+        # scale last beta by c[T-1] (not strictly necessary if using gamma = alpha * beta)
+        beta[T - 1, :] /= c[T - 1]
+
+        for t in range(T - 2, -1, -1):
+            # elementwise: beta_t(i) = sum_j a_ij * b_j(o_{t+1}) * beta_{t+1}(j)
+            tmp = (B[:, O[t + 1]] * beta[t + 1, :])
+            beta[t, :] = A.dot(tmp)
+            # scale by c[t] (consistent with alpha scaling)
+            beta[t, :] /= (c[t] + 1e-300)
+
+        return beta
+
+    def _compute_gamma_xi(self, alpha, beta, A, B, O):
+        """
+        Compute gamma_t(i) and xi_t(i,j) for each t using scaled alpha and beta.
+        gamma_t(i) = P(x_t = i | O, λ)  (should sum to 1 over i)
+        xi_t(i,j)  = P(x_t=i, x_{t+1}=j | O, λ)
+        For numerical stability we compute xi numerator and normalize by its sum.
+        """
+        T, N = alpha.shape
+        gamma = alpha * beta  # element-wise
+        # normalize gamma rows to sum 1 (should already be normalized)
+        gamma /= (gamma.sum(axis=1, keepdims=True) + 1e-300)
+
+        xi = np.zeros((T - 1, N, N), dtype=float)
+        for t in range(T - 1):
+            # numerator: alpha_t(i) * a_ij * b_j(o_{t+1}) * beta_{t+1}(j)
+            # expand alpha_t to (N,1), multiply by A -> (N,N), elementwise multiply by b*beta_{t+1}
+            numerator = (alpha[t, :][:, None] * A) * (B[:, O[t + 1]] * beta[t + 1, :])[None, :]
+            denom = numerator.sum()
+            if denom <= 0:
+                denom = 1e-300
+            xi[t, :, :] = numerator / denom
+        return gamma, xi
+
+    def _reestimate(self, gamma, xi, O, reestimate_A=False):
+        """
+        Re-estimate parameters using gamma and xi.
+        - pi' = gamma_0
+        - A' = sum_t xi_t(i,j) / sum_t gamma_t(i)   (if reestimate_A True)
+        - B' = for each state j and symbol k: sum_{t:O_t=k} gamma_t(j) / sum_t gamma_t(j)
+        """
+        T, N = gamma.shape
+        M = self.n_unique_symbols
+
+        pi_new = gamma[0, :].copy()
+
+        A_new = None
+        if reestimate_A:
+            numer = xi.sum(axis=0)  # shape (N,N)
+            denom = gamma[:-1, :].sum(axis=0)[:, None]  # shape (N,1)
+            denom[denom == 0] = 1e-300
+            A_new = numer / denom
+            # normalize rows
+            A_new = A_new / (A_new.sum(axis=1, keepdims=True) + 1e-300)
+
+        # Re-estimate B
+        B_new = np.zeros((N, M), dtype=float)
+        denom = gamma.sum(axis=0)  # shape (N,)
+        denom[denom == 0] = 1e-300
+        for k in range(M):
+            mask = (O == k)
+            if mask.any():
+                B_new[:, k] = gamma[mask, :].sum(axis=0)
+            # else leave zeros; we'll normalize later
+
+        B_new = B_new / (denom[:, None] + 1e-300)
+        # if any row sums to zero (possible in degenerate cases), reinitialize slightly
+        zero_rows = np.where(np.isnan(B_new).any(axis=1) | (B_new.sum(axis=1) == 0))[0]
+        if len(zero_rows) > 0:
+            for r in zero_rows:
+                B_new[r, :] = (1e-2 / M) + np.random.default_rng().random(M) * 1e-2
+            B_new = B_new / (B_new.sum(axis=1, keepdims=True) + 1e-300)
+
+        return pi_new, A_new, B_new
+
+    def _train_once(self, max_iter=200, tol=1e-6, base=0.1, reestimate_A=False):
+        """
+        Run EM (Baum-Welch) starting from a random B init (base + U(0,1)).
+        Returns: best_loglik, best_B, decoded_text
+        """
+        O = self.observations  # indices 0..M-1
+        T = len(O)
+        # initialize
+        pi, A, B = self._init_em_params(base=base)
+        best_loglik = -np.inf
+        best_B = None
+        prev_loglik = -np.inf
+
+        for iteration in range(max_iter):
+            # forward/backward with scaling
+            alpha, c, loglik = self._forward_scaled(pi, A, B, O)
+            beta = self._backward_scaled(A, B, O, c)
+            gamma, xi = self._compute_gamma_xi(alpha, beta, A, B, O)
+
+            # re-estimate
+            pi_new, A_new, B_new = self._reestimate(gamma, xi, O, reestimate_A=reestimate_A)
+
+            # update parameters (only replace A if reestimate_A True)
+            pi = pi_new
+            if reestimate_A and (A_new is not None):
+                A = A_new
+            B = B_new
+
+            # track progress
+            if loglik > best_loglik:
+                best_loglik = loglik
+                best_B = B.copy()
+
+            # check convergence
+            if iteration > 0 and abs(loglik - prev_loglik) < tol:
+                break
+            prev_loglik = loglik
+
+        # decode via argmax over best_B: map each cipher symbol k -> argmax_j best_B[j,k]
+        mapping = np.argmax(best_B, axis=0)  # length M, values in 0..N-1
+        decoded_chars = [self.en_alphabet[mapping[sym]] for sym in self.observations]
+        decoded_text = ''.join(decoded_chars)
+
+        return best_loglik, best_B, decoded_text
+
+    # Replace your run_single_hmm with this paper-faithful function
+    def run_single_hmm(self, X_dummy=None, max_iter=200, base=0.1, reestimate_A=False):
+        """
+        Run a single random-restart EM training (paper-faithful).
+        Return: loglik, decoded_text
+        Note: X_dummy exists only to fit into Parallel(...)(delayed(self.run_single_hmm)(X) ...)
+        """
+        try:
+            rng_seed = int.from_bytes(os.urandom(8), "little")
+            np.random.seed(rng_seed)
+            loglik, best_B, decoded = self._train_once(max_iter=max_iter, base=base, reestimate_A=reestimate_A)
+            return float(loglik), decoded
+        except Exception as e:
+            return float('-inf'), f"HMM training failed: {e}"
     
     def run_analysis(self, total_restarts=1000, batch_size=100):
         print("=" * 60)
