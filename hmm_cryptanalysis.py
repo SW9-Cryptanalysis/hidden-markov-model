@@ -309,11 +309,12 @@ class HMMCryptanalysis:
         Note: X_dummy exists only to fit into Parallel(...)(delayed(self.run_single_hmm)(X) ...)
         """
         try:
-            rng_seed = int.from_bytes(os.urandom(8), "little")
-            np.random.seed(rng_seed)
+            np.random.seed(np.random.randint(0, 2**32 - 1))
+
             loglik, best_B, decoded = self._train_once(max_iter=max_iter, base=base, reestimate_A=reestimate_A)
             return float(loglik), decoded
         except Exception as e:
+            print("ERROR IN RESTART:", e)
             return float('-inf'), f"HMM training failed: {e}"
     
     def run_analysis(self, total_restarts=1000, batch_size=100):
