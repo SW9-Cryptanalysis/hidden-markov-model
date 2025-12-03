@@ -254,6 +254,7 @@ class HMMCryptanalysis:
 
         # Re-estimate B
         B_new = np.zeros((N, M), dtype=float)
+        EPSILON = 1e-6
         denom = gamma.sum(axis=0)  # shape (N,)
         denom[denom == 0] = 1e-300
         for k in range(M):
@@ -263,7 +264,9 @@ class HMMCryptanalysis:
                 B_new[:, k] = gamma[mask, :].sum(axis=0)
             # else leave zeros; we'll normalize later
 
-        B_new = B_new / (denom[:, None] + 1e-300)
+        B_new += EPSILON
+        denom_smoothed = denom + M * EPSILON
+        B_new = B_new / (denom_smoothed[:, None])
 
         # Reinitialize any degenerate rows (shouldn't be common but safe)
         bad_rows = np.where(~np.isfinite(B_new).all(axis=1) | (B_new.sum(axis=1) == 0))[0]
