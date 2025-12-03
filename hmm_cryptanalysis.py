@@ -9,7 +9,7 @@ import math
 from joblib import Parallel, delayed
 import multiprocessing
 import logging
-import warnings # Re-added for RuntimeWarning suppression
+import warnings
 
 import time
 from datetime import datetime
@@ -20,7 +20,7 @@ np.random.seed(42)
 TRANS_MATRIX_FILENAME = "full_english_transmat.npy"
 CHECKPOINT_FILE = "output/hmm_checkpoint.json"
 # Global constant for the base value used in B matrix initialization
-BASE_VALUE = 0.1 
+BASE_VALUE = 0.1
 # Standard English letter frequencies
 ENGLISH_FREQUENCIES = {
     'e': 0.1270, 't': 0.0906, 'a': 0.0817, 'o': 0.0751, 'i': 0.0697,
@@ -50,6 +50,9 @@ class HMMCryptanalysis:
         
         # 💡 Integration Point: Load the full transition matrix immediately
         self.transition_matrix = self._load_transition_matrix()
+        # keep pi fixed to english prior (paper recommends fixed pi)
+        self.fixed_pi = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
+        self.fixed_pi = self.fixed_pi / self.fixed_pi.sum()
         
     def load_cipher_data(self):
         """Load and parse cipher data from JSON file."""
@@ -94,15 +97,21 @@ class HMMCryptanalysis:
         if the file is not found.
         """
         if os.path.exists(TRANS_MATRIX_FILENAME):
-            return np.load(TRANS_MATRIX_FILENAME)
+            mat = np.load(TRANS_MATRIX_FILENAME)
+            # Ensure proper shape
+            if mat.shape != (self.alphabet_size, self.alphabet_size):
+                raise ValueError(f"Loaded transition matrix has wrong shape: {mat.shape}")
+            # normalize rows
+            mat = mat / (mat.sum(axis=1, keepdims=True) + 1e-300)
+            return mat.astype(float)
         else:
             print(f"⚠️ WARNING: '{TRANS_MATRIX_FILENAME}' not found. Using flat transition matrix.")
             # Fallback: Simple smoothed matrix 
             smoothing_factor = 1e-6
-            flat_matrix = np.full((self.alphabet_size, self.alphabet_size), smoothing_factor)
+            flat_matrix = np.full((self.alphabet_size, self.alphabet_size), smoothing_factor, dtype=float)
             flat_matrix += np.random.uniform(0, 1e-4, size=flat_matrix.shape)
             row_sums = flat_matrix.sum(axis=1, keepdims=True)
-            return flat_matrix / row_sums
+            return (flat_matrix / row_sums).astype(float)
 
     def create_transition_matrix(self) -> np.ndarray:
         """
@@ -110,19 +119,18 @@ class HMMCryptanalysis:
         """
         return self.transition_matrix
     
-    def _init_em_params(self, base=0.1):
+    def _init_em_params(self, rng: np.random.Generator, base=BASE_VALUE):
         """
-        Initialize HMM parameters according to the paper:
+        Initialize HMM parameters.
         - A: loaded transition matrix (26x26) (fixed by default)
-        - pi: initial probs from english frequencies (normalized)
+        - pi: fixed to English frequencies
         - B: emission matrix initialized as base + Uniform(0,1), rows normalized
         """
         N = self.alphabet_size          # 26
         M = self.n_unique_symbols       # number of cipher symbols
 
-        # pi (initial state distribution)
-        pi = np.array([self.english_frequencies[letter] for letter in self.en_alphabet])
-        pi = pi / pi.sum()
+        # pi (initial state distribution) - keep fixed
+        pi = self.fixed_pi.copy()
 
         # A (transition matrix)
         A = self.create_transition_matrix()
@@ -130,9 +138,15 @@ class HMMCryptanalysis:
         A = A / (A.sum(axis=1, keepdims=True) + 1e-16)
 
         # B (emission matrix) per paper: b_ij = base + Uniform(0,1), then normalize row-wise
-        rng = np.random.default_rng()
         B = base + rng.random((N, M))
         B = B / (B.sum(axis=1, keepdims=True) + 1e-16)
+
+        # Sanity checks
+        assert B.shape == (N, M)
+        assert A.shape == (N, N)
+        # rows sum to 1
+        assert np.allclose(A.sum(axis=1), 1.0, atol=1e-6)
+        assert np.all(B.sum(axis=1) > 0)
 
         return pi, A, B
     
@@ -166,29 +180,29 @@ class HMMCryptanalysis:
             alpha[t, :] /= c[t]
 
         # log-likelihood: log P(O|λ) = - sum_t log(c[t])
+        # c contains the evidence scaling factors; we use negative sum of logs per Rabiner
         loglik = -np.sum(np.log(c + 1e-300))
         return alpha, c, loglik
 
     def _backward_scaled(self, A, B, O, c):
         """
-        Scaled backward algorithm (consistent with forward scaling).
+        Correct scaled backward algorithm (consistent with forward scaling).
         Returns beta scaled so that alpha_t * beta_t sums to 1.
         """
         T = len(O)
         N = A.shape[0]
         beta = np.zeros((T, N), dtype=float)
 
-        # initialize
-        beta[T - 1, :] = 1.0  # with scaled alpha, this is standard
-        # scale last beta by c[T-1] (not strictly necessary if using gamma = alpha * beta)
-        beta[T - 1, :] /= c[T - 1]
+        # initialize last beta
+        beta[T - 1, :] = 1.0
 
+        # backward recursion: note the division by c[t+1]
         for t in range(T - 2, -1, -1):
-            # elementwise: beta_t(i) = sum_j a_ij * b_j(o_{t+1}) * beta_{t+1}(j)
-            tmp = (B[:, O[t + 1]] * beta[t + 1, :])
+            tmp = B[:, O[t + 1]] * beta[t + 1, :]
+            # beta[t,i] = sum_j a_ij * b_j(o_{t+1}) * beta[t+1, j]
             beta[t, :] = A.dot(tmp)
-            # scale by c[t] (consistent with alpha scaling)
-            beta[t, :] /= (c[t] + 1e-300)
+            # scale by c[t+1] (important: not c[t])
+            beta[t, :] /= (c[t + 1] + 1e-300)
 
         return beta
 
@@ -202,12 +216,13 @@ class HMMCryptanalysis:
         T, N = alpha.shape
         gamma = alpha * beta  # element-wise
         # normalize gamma rows to sum 1 (should already be normalized)
-        gamma /= (gamma.sum(axis=1, keepdims=True) + 1e-300)
+        gamma_sum = gamma.sum(axis=1, keepdims=True)
+        gamma_sum[gamma_sum == 0] = 1e-300
+        gamma /= gamma_sum
 
         xi = np.zeros((T - 1, N, N), dtype=float)
         for t in range(T - 1):
             # numerator: alpha_t(i) * a_ij * b_j(o_{t+1}) * beta_{t+1}(j)
-            # expand alpha_t to (N,1), multiply by A -> (N,N), elementwise multiply by b*beta_{t+1}
             numerator = (alpha[t, :][:, None] * A) * (B[:, O[t + 1]] * beta[t + 1, :])[None, :]
             denom = numerator.sum()
             if denom <= 0:
@@ -215,16 +230,17 @@ class HMMCryptanalysis:
             xi[t, :, :] = numerator / denom
         return gamma, xi
 
-    def _reestimate(self, gamma, xi, O, reestimate_A=False):
+    def _reestimate(self, gamma, xi, O, reestimate_A=False, rng: Optional[np.random.Generator] = None, base=BASE_VALUE):
         """
         Re-estimate parameters using gamma and xi.
-        - pi' = gamma_0
+        - pi' = gamma_0   (we will not update pi in training loop to keep it fixed)
         - A' = sum_t xi_t(i,j) / sum_t gamma_t(i)   (if reestimate_A True)
         - B' = for each state j and symbol k: sum_{t:O_t=k} gamma_t(j) / sum_t gamma_t(j)
         """
         T, N = gamma.shape
         M = self.n_unique_symbols
 
+        # pi_new (returned but typically ignored by training loop)
         pi_new = gamma[0, :].copy()
 
         A_new = None
@@ -243,20 +259,24 @@ class HMMCryptanalysis:
         for k in range(M):
             mask = (O == k)
             if mask.any():
+                # sum gamma_t(j) over times t where observation == k
                 B_new[:, k] = gamma[mask, :].sum(axis=0)
             # else leave zeros; we'll normalize later
 
         B_new = B_new / (denom[:, None] + 1e-300)
-        # if any row sums to zero (possible in degenerate cases), reinitialize slightly
-        zero_rows = np.where(np.isnan(B_new).any(axis=1) | (B_new.sum(axis=1) == 0))[0]
-        if len(zero_rows) > 0:
-            for r in zero_rows:
-                B_new[r, :] = (1e-2 / M) + np.random.default_rng().random(M) * 1e-2
+
+        # Reinitialize any degenerate rows (shouldn't be common but safe)
+        bad_rows = np.where(~np.isfinite(B_new).all(axis=1) | (B_new.sum(axis=1) == 0))[0]
+        if len(bad_rows) > 0:
+            if rng is None:
+                rng = np.random.default_rng()
+            for r in bad_rows:
+                B_new[r, :] = base + rng.random(M)
             B_new = B_new / (B_new.sum(axis=1, keepdims=True) + 1e-300)
 
         return pi_new, A_new, B_new
 
-    def _train_once(self, max_iter=200, tol=1e-6, base=0.1, reestimate_A=False):
+    def _train_once(self, rng: np.random.Generator, max_iter=200, tol=1e-6, base=BASE_VALUE, reestimate_A=False):
         """
         Run EM (Baum-Welch) starting from a random B init (base + U(0,1)).
         Returns: best_loglik, best_B, decoded_text
@@ -264,22 +284,22 @@ class HMMCryptanalysis:
         O = self.observations  # indices 0..M-1
         T = len(O)
         # initialize
-        pi, A, B = self._init_em_params(base=base)
+        pi, A, B = self._init_em_params(rng=rng, base=base)
         best_loglik = -np.inf
         best_B = None
         prev_loglik = -np.inf
 
+        # NOTE: we intentionally DO NOT update pi during training — keep it fixed
         for iteration in range(max_iter):
             # forward/backward with scaling
             alpha, c, loglik = self._forward_scaled(pi, A, B, O)
             beta = self._backward_scaled(A, B, O, c)
             gamma, xi = self._compute_gamma_xi(alpha, beta, A, B, O)
 
-            # re-estimate
-            pi_new, A_new, B_new = self._reestimate(gamma, xi, O, reestimate_A=reestimate_A)
+            # re-estimate (we will not assign pi = pi_new to keep it fixed)
+            pi_new, A_new, B_new = self._reestimate(gamma, xi, O, reestimate_A=reestimate_A, rng=rng, base=base)
 
             # update parameters (only replace A if reestimate_A True)
-            pi = pi_new
             if reestimate_A and (A_new is not None):
                 A = A_new
             B = B_new
@@ -301,17 +321,19 @@ class HMMCryptanalysis:
 
         return best_loglik, best_B, decoded_text
 
-    # Replace your run_single_hmm with this paper-faithful function
-    def run_single_hmm(self, X_dummy=None, max_iter=200, base=0.1, reestimate_A=False):
+    def run_single_hmm(self, X_dummy=None, max_iter=200, base=BASE_VALUE, reestimate_A=False):
         """
-        Run a single random-restart EM training (paper-faithful).
+        Run a single random-restart EM training
         Return: loglik, decoded_text
         Note: X_dummy exists only to fit into Parallel(...)(delayed(self.run_single_hmm)(X) ...)
         """
         try:
-            np.random.seed(int.from_bytes(os.urandom(4), "little"))
+            # create an independent RNG for this worker
+            seed_bytes = os.urandom(8)
+            seed = int.from_bytes(seed_bytes, "little")
+            rng = np.random.default_rng(seed)
 
-            loglik, best_B, decoded = self._train_once(max_iter=max_iter, base=base, reestimate_A=reestimate_A)
+            loglik, best_B, decoded = self._train_once(rng=rng, max_iter=max_iter, base=base, reestimate_A=reestimate_A)
             return float(loglik), decoded
         except Exception as e:
             print("ERROR IN RESTART:", e)
@@ -387,7 +409,10 @@ class HMMCryptanalysis:
 
             print(f"Checkpoint saved. Batch runtime: {batch_runtime:.2f}s. "
                 f"Total runtime: {accumulated_runtime:.2f}s")
-            os.sync()
+            try:
+                os.sync()
+            except Exception:
+                pass
             
         print("\nAll batches completed.")
         print(f"Best log likelihood: {best_log_likelihood:.2f}")
