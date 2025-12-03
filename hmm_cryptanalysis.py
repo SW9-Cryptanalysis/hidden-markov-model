@@ -20,7 +20,7 @@ np.random.seed(42)
 TRANS_MATRIX_FILENAME = "full_english_transmat.npy"
 CHECKPOINT_FILE = "output/hmm_checkpoint.json"
 # Global constant for the base value used in B matrix initialization
-BASE_VALUE = 0.1
+BASE_VALUE = 1e-3 # Or even 1e-5
 # Standard English letter frequencies
 ENGLISH_FREQUENCIES = {
     'e': 0.1270, 't': 0.0906, 'a': 0.0817, 'o': 0.0751, 'i': 0.0697,
